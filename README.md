@@ -8,7 +8,7 @@ A collection of practical userscripts maintained in one repository. Each script 
 
 | Script | Description | Install |
 | --- | --- | --- |
-| [GitHub Copy Path & Line](scripts/github-copy-path-line/README.md) | Copy a selected file path and line range from a GitHub pull request diff. | [Install from GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
+| [GitHub Copy Path & Line](scripts/github-copy-path-line/README.md) | Copy a selected file path and line range from a GitHub pull request diff. | [Greasy Fork](https://greasyfork.org/en/scripts/591850-github-copy-file-path-and-line-number) / [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
 
 ## Installation
 
@@ -25,4 +25,3 @@ Every directory under `scripts/` is an independently versioned userscript. This 
 ## License
 
 [MIT](LICENSE)
-

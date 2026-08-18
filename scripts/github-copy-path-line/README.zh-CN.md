@@ -8,8 +8,8 @@
 
 请先安装 [Tampermonkey](https://www.tampermonkey.net/) 等用户脚本管理器。
 
+- [从 Greasy Fork 安装](https://greasyfork.org/zh-CN/scripts/591850-github-%E5%A4%8D%E5%88%B6%E6%96%87%E4%BB%B6%E8%B7%AF%E5%BE%84%E4%B8%8E%E8%A1%8C%E5%8F%B7)（推荐）
 - [从 GitHub 安装](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js)
-- 首次社区发布完成后补充 Greasy Fork 安装入口。
 
 ## 使用方法
 

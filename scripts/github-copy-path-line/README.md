@@ -8,8 +8,8 @@ Adds a **Copy path:line** action to the line menu in GitHub pull request diffs. 
 
 You need a userscript manager such as [Tampermonkey](https://www.tampermonkey.net/).
 
+- [Install from Greasy Fork](https://greasyfork.org/en/scripts/591850-github-copy-file-path-and-line-number) (recommended)
 - [Install from GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js)
-- Greasy Fork installation will be added after the first community release.
 
 ## Usage
 
@@ -43,4 +43,3 @@ The script requests `GM_setClipboard` only to copy the generated reference. It d
 ## License
 
 [MIT](../../LICENSE)
-
