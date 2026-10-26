@@ -2,13 +2,14 @@
 
 [简体中文](README.zh-CN.md)
 
-A collection of practical userscripts maintained in one repository. Each script has its own directory, documentation, version, and Greasy Fork release.
+A collection of practical userscripts maintained in one repository. Each script has its own directory, documentation, and version, and can be released independently on Greasy Fork.
 
 ## Scripts
 
-| Script | Description | Install |
-| --- | --- | --- |
-| [GitHub Copy Path & Line](scripts/github-copy-path-line/README.md) | Copy a selected file path and line range from a GitHub pull request diff. | [Greasy Fork](https://greasyfork.org/en/scripts/591850-github-copy-file-path-and-line-number) / [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
+| Script                                                             | Description                                                                     | Install                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [GitHub Copy Path & Line](scripts/github-copy-path-line/README.md) | Copy a selected file path and line range from a GitHub pull request diff.       | [Greasy Fork](https://greasyfork.org/en/scripts/591850-github-copy-file-path-and-line-number) / [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
+| [GitHub Watch Panel](scripts/github-watch/README.md)               | Follow repositories, branches, PRs and CI with local caching and tab switching. | [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-watch/github-watch.user.js)                                                                                                                   |
 
 ## Installation
 

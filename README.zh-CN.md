@@ -2,13 +2,14 @@
 
 [English](README.md)
 
-集中维护实用油猴脚本的仓库。每个脚本都有独立目录、使用说明、版本和 Greasy Fork 发布条目。
+集中维护实用油猴脚本的仓库。每个脚本都有独立目录、使用说明和版本，可以独立发布到 Greasy Fork。
 
 ## 脚本列表
 
-| 脚本 | 说明 | 安装 |
-| --- | --- | --- |
+| 脚本                                                                       | 说明                                                      | 安装                                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [GitHub 复制文件路径与行号](scripts/github-copy-path-line/README.zh-CN.md) | 从 GitHub Pull Request 差异中复制所选文件路径和行号范围。 | [Greasy Fork](https://greasyfork.org/zh-CN/scripts/591850-github-%E5%A4%8D%E5%88%B6%E6%96%87%E4%BB%B6%E8%B7%AF%E5%BE%84%E4%B8%8E%E8%A1%8C%E5%8F%B7) / [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
+| [GitHub 关注面板](scripts/github-watch/README.zh-CN.md)                    | 关注仓库、分支、PR 和 CI，支持本地缓存与标签跳转。        | [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-watch/github-watch.user.js)                                                                                                                                                                         |
 
 ## 安装方法
 
