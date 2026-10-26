@@ -2,7 +2,7 @@
 // @name         GitHub 关注面板
 // @name:en      GitHub Watch Panel
 // @namespace    https://github.com/roxi3906/magic-monkey-scripts
-// @version      1.0.0
+// @version      1.0.1
 // @description  使用已有登录态关注 GitHub 仓库、分支、PR 和 CI，支持缓存和标签跳转。
 // @description:en Watch GitHub repositories, branches, pull requests and CI using your existing session.
 // @author       Roxi
@@ -104,9 +104,12 @@
   const summarizeCI = (states) => {
     const values = states.map(stateOf);
     const passed = values.filter((s) => s === "success").length;
-    const done = values.filter((s) =>
-      ["success", "failure", "skipped"].includes(s),
-    ).length;
+    // 完成数包含跳过和失败，不能当成通过数展示。
+    const skipped = values.filter((s) => s === "skipped").length;
+    const failed = values.filter((s) => s === "failure").length;
+    const pending = values.filter((s) => s === "pending").length;
+    const unknown = values.filter((s) => s === "unknown").length;
+    const done = passed + skipped + failed;
     const state = !values.length
       ? "none"
       : values.includes("failure")
@@ -118,7 +121,16 @@
             : passed
               ? "success"
               : "neutral";
-    return { state, total: values.length, done, passed };
+    return {
+      state,
+      total: values.length,
+      done,
+      passed,
+      skipped,
+      failed,
+      pending,
+      unknown,
+    };
   };
   const sortPRs = (items) =>
     [...items].sort(
@@ -226,16 +238,39 @@
     const p = embedded(doc);
     const fragment = p["pullRequestsChecksRoute.Main"]?.value;
     const root = fragment ? dom(fragment) : doc;
-    const states = [...root.querySelectorAll(".checks-list-item-icon")].map(
-      (el) => {
-        const labels = [...el.querySelectorAll("[aria-label]")].map((node) =>
-          node.getAttribute("aria-label"),
+    const latest = new Map();
+    const rawStates = [];
+    for (const icon of root.querySelectorAll(".checks-list-item-icon")) {
+      const labels = [...icon.querySelectorAll("[aria-label]")].map((node) =>
+        node.getAttribute("aria-label"),
+      );
+      const state =
+        labels.find((label) => stateOf(label) !== "unknown") || "unknown";
+      rawStates.push(stateOf(state));
+      // Checks 侧栏会同时包含同名工作流的旧执行；只对有明确身份的 Actions job 去重。
+      const link = icon
+        .closest(".checks-list-item")
+        ?.querySelector('a[href*="/job/"]');
+      const job = link
+        ?.getAttribute("href")
+        ?.match(
+          /^(\/[\w.-]+\/[\w.-]+)\/actions\/runs\/\d+\/job\/(\d+)(?:[?#]|$)/,
         );
-        return (
-          labels.find((label) => stateOf(label) !== "unknown") || "unknown"
-        );
-      },
-    );
+      const workflow = icon
+        .closest('details[id^="sidebar_check_suite_"]')
+        ?.querySelector('summary a[href*="/actions/runs/"]')
+        ?.textContent.replace(/\s+/g, " ")
+        .trim();
+      const name = link?.textContent.trim();
+      const key =
+        job && workflow && name
+          ? JSON.stringify([job[1], workflow, name])
+          : icon;
+      const previous = latest.get(key);
+      if (!previous || BigInt(job[2]) > previous.id)
+        latest.set(key, { state, id: job ? BigInt(job[2]) : 0n });
+    }
+    const states = [...latest.values()].map((check) => check.state);
     if (
       !states.length &&
       !root.querySelector('[aria-label="Check suites"]') &&
@@ -247,10 +282,17 @@
     const aggregate = [...root.querySelectorAll(".donut-chart path")].map(
       (el) => stateOf(el.getAttribute("class")),
     );
-    if (aggregate.includes("failure")) ci.state = "failure";
-    else if (aggregate.includes("unknown")) ci.state = "unknown";
-    else if (aggregate.includes("pending") && ci.state !== "failure")
+    // 圆环也包含旧执行；仅用列表中完全缺失的类别阻止误报全绿，数量仍以可读检查为准。
+    const unlisted = aggregate.filter((state) => !rawStates.includes(state));
+    if (unlisted.includes("failure")) ci.state = "failure";
+    else if (unlisted.includes("unknown")) ci.state = "unknown";
+    else if (unlisted.includes("pending") && ci.state !== "failure")
       ci.state = "pending";
+    if (unlisted.length) {
+      ci.incomplete = true;
+      if (["success", "neutral", "none"].includes(ci.state))
+        ci.state = "unknown";
+    }
     return {
       ...ci,
       sha: p.pullRequestsLayoutRoute?.pullRequest?.headSha || "",
@@ -361,7 +403,9 @@
 
     // 缓存只包含解析后的显示字段；每个资源独立重验证，失败保留最后成功值。
     const resource = async (path, parse, ttl = TTL, cachedOnly = false) => {
-      const key = cachePrefix + path;
+      // 旧 CI 缓存只有完成数，不能通过 304 恢复分类；单独升级该资源，不动关注列表。
+      const key =
+        cachePrefix + path + (parse === parseChecks ? ":counts-v2" : "");
       const load = async () => {
         const saved = await GM.getValue(key);
         if (
@@ -798,6 +842,18 @@
           ciLabel(ci),
         ),
       );
+      if (Number.isInteger(ci.failed)) {
+        const counts = [
+          `通过 ${ci.passed}`,
+          `跳过 ${ci.skipped}`,
+          `失败 ${ci.failed}`,
+        ];
+        if (ci.pending) counts.push(`进行中 ${ci.pending}`);
+        if (ci.unknown) counts.push(`未知 ${ci.unknown}`);
+        node.append(el("div", "sub ci-counts", counts.join(" · ")));
+      }
+      if (ci.incomplete)
+        node.append(el("div", "sub", "部分检查未加载，数量仅含已读取项"));
       if (ci.total) {
         const track = el("div", "track");
         track.setAttribute("role", "progressbar");
@@ -805,6 +861,7 @@
         track.setAttribute("aria-valuenow", String(ci.done));
         track.setAttribute("aria-valuemin", "0");
         track.setAttribute("aria-valuemax", String(ci.total));
+        track.setAttribute("aria-valuetext", `已完成 ${ci.done}/${ci.total}`);
         const fill = el("div", "fill");
         fill.style.width = `${(ci.done / ci.total) * 100}%`;
         track.append(fill);

@@ -536,3 +536,188 @@ test("confirmation remains visible when an in-flight refresh redraws a card", as
     await env.context.close();
   }
 });
+
+// Sanitized Checks sidebar shape: repeated workflow runs appear together.
+const suite = (id, workflow, jobs) => `<details id="sidebar_check_suite_${id}">
+  <summary><a href="/acme/demo/actions/runs/${id}"><span>${workflow}</span><span>on: pull_request</span></a></summary>
+  ${jobs
+    .map(
+      ([job, name, state]) => `<div class="checks-list-item"><div>
+    <span class="checks-list-item-icon"><svg aria-label="${state}"></svg></span>
+    <a href="/acme/demo/actions/runs/${id}/job/${job}?pr=1"><span>${name}</span></a>
+  </div></div>`,
+    )
+    .join("")}</details>`;
+const mixedChecks = () => {
+  const payload = checks([]);
+  payload["pullRequestsChecksRoute.Main"].value =
+    `<aside aria-label="Check suites">` +
+    suite(20, "CI", [
+      ...Array.from({ length: 17 }, (_, i) => [
+        200 + i,
+        `Pass ${i}`,
+        "This job succeeded",
+      ]),
+      ...Array.from({ length: 11 }, (_, i) => [
+        300 + i,
+        `Skip ${i}`,
+        "This job was skipped",
+      ]),
+      [400, "Fail 0", "This job failed"],
+      [401, "Fail 1", "This job failed"],
+    ]) +
+    suite(10, "CI", [
+      [100, "Pass 0", "This job was cancelled"],
+      [101, "Skip 0", "This job succeeded"],
+      [102, "Skip 1", "This job succeeded"],
+    ]) +
+    `</aside><svg class="donut-chart"><path class="failure"></path></svg>`;
+  return payload;
+};
+
+test("CI cards and repository previews show latest classified counts instead of historical jobs", async () => {
+  const env = await setup();
+  try {
+    env.respond(async (route) => {
+      if (!route.request().url().endsWith("/checks")) return false;
+      await route.fulfill({
+        contentType: "text/html",
+        body: html(mixedChecks()),
+      });
+      return true;
+    });
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    const card = page.locator('article[data-key="acme/demo#1"]');
+    assert.match(await card.innerText(), /通过 17.*跳过 11.*失败 2/s);
+    assert.equal(
+      await card.getByRole("progressbar").getAttribute("aria-valuemax"),
+      "30",
+    );
+    assert.equal(
+      await card.getByRole("progressbar").getAttribute("aria-valuenow"),
+      "30",
+    );
+    await page.screenshot({ path: ".codex/probes/ci-counts-desktop.png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: ".codex/probes/ci-counts-mobile.png" });
+    await page
+      .getByRole("button", { name: "关注当前仓库", exact: true })
+      .click();
+    await page.getByRole("button", { name: "仓库 (1)", exact: true }).click();
+    await page.getByText("★ 123").waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    assert.equal(
+      await page
+        .getByText("通过 17 · 跳过 11 · 失败 2", { exact: true })
+        .count(),
+      2,
+    );
+  } finally {
+    await env.context.close();
+  }
+});
+
+test("upgrading CI cache refetches counts without losing followed items or other resource validators", async () => {
+  const env = await setup();
+  try {
+    const prefix = "github-watch:v1:tester:";
+    env.store[prefix + "item:acme/demo#1"] = {
+      repo: "acme/demo",
+      number: 1,
+      key: "acme/demo#1",
+    };
+    env.store[prefix + "cache:/acme/demo/pull/1/checks"] = {
+      data: {
+        state: "success",
+        total: 33,
+        done: 33,
+        passed: 20,
+        sha: "abc123",
+      },
+      at: Date.now(),
+      attemptedAt: Date.now(),
+      etag: '"legacy"',
+      error: "",
+    };
+    let fetched = 0;
+    env.respond(async (route) => {
+      if (!route.request().url().endsWith("/checks")) return false;
+      assert.equal(route.request().headers()["if-none-match"], undefined);
+      fetched++;
+      await route.fulfill({
+        contentType: "text/html",
+        body: html(mixedChecks()),
+      });
+      return true;
+    });
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    assert.equal(fetched, 1);
+    assert.match(
+      await page.locator('article[data-key="acme/demo#1"]').innerText(),
+      /通过 17.*跳过 11.*失败 2/s,
+    );
+    assert.ok(env.store[prefix + "item:acme/demo#1"]);
+  } finally {
+    await env.context.close();
+  }
+});
+
+test("CI deduplication keeps distinct workflows and unknown jobs, and ignores superseded failures", async () => {
+  const page = await browser.newPage();
+  try {
+    const parse = async (fragment) =>
+      page.evaluate(
+        ({ source, fragment }) => {
+          const module = { exports: {} };
+          eval(source);
+          return module.exports.parseChecks(
+            new DOMParser().parseFromString(fragment, "text/html"),
+          );
+        },
+        { source: fs.readFileSync(scriptPath, "utf8"), fragment },
+      );
+    const history =
+      suite(2, "CI", [[20, "Build", "This job succeeded"]]) +
+      suite(1, "CI", [[10, "Build", "This job failed"]]);
+    const latest = await parse(
+      history +
+        '<svg class="donut-chart"><path class="failure"></path><path class="success"></path></svg>',
+    );
+    assert.equal(latest.total, 1);
+    assert.equal(latest.state, "success");
+    assert.equal(latest.failed, 0);
+    const mixed = await parse(
+      history +
+        suite(3, "Other CI", [[30, "Build", "This job is queued"]]) +
+        '<div class="checks-list-item-icon"><svg aria-label="Unrecognized status"></svg></div>',
+    );
+    assert.equal(mixed.total, 3);
+    assert.equal(mixed.pending, 1);
+    assert.equal(mixed.unknown, 1);
+    assert.equal(mixed.done, 1);
+    assert.equal(mixed.state, "unknown");
+    const hidden = await parse(
+      suite(2, "CI", [[20, "Build", "This job succeeded"]]) +
+        '<svg class="donut-chart"><path class="failure"></path></svg>',
+    );
+    assert.equal(hidden.state, "failure");
+    assert.equal(hidden.incomplete, true);
+    assert.equal(hidden.failed, 0); // No invented count for a hidden result.
+    const missingSkipped = await parse(
+      suite(2, "CI", [[20, "Build", "This job succeeded"]]) +
+        '<svg class="donut-chart"><path class="success"></path><path class="skipped"></path></svg>',
+    );
+    assert.equal(missingSkipped.incomplete, true);
+    assert.equal(missingSkipped.state, "unknown");
+  } finally {
+    await page.close();
+  }
+});

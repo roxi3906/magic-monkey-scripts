@@ -14,7 +14,7 @@ Refresh existing GitHub tabs after installing so they can participate in tab dis
 
 1. Click the **GH** button at the bottom right.
 2. Use **关注当前仓库** / **关注当前 PR**, or enter `owner/repo` or a GitHub PR URL and click **添加**.
-3. Switch between **PR** and **仓库** groups. PR cards show title, number, author, state, comment count, commit count and completed/total CI checks. Fresh PRs with passing CI sort first; skipped-only, missing, failed, stale and pending checks do not.
+3. Switch between **PR** and **仓库** groups. PR cards show title, number, author, state, comment count, commit count and completed/total CI checks, with separate passed, skipped and failed counts (plus pending or unknown counts when present). Fresh PRs with passing CI sort first; skipped-only, missing, failed, stale and pending checks do not.
 4. Repository cards show stars, the open PR count and the five most recently created open PRs, including their author, CI and comment count. **选择分支** opens a multi-select list with **更多分支** pagination. The default branch is selected initially; each selected branch shows its latest commit and five recent Actions runs.
 5. Click a PR title or **↗** to focus a matching registered tab; otherwise a new active tab opens. Commit and Actions links open new tabs. Click **×** on a card to remove it, then confirm or keep following. Escape closes the branch editor or panel.
 
@@ -28,7 +28,7 @@ Refresh existing GitHub tabs after installing so they can participate in tab dis
 
 ## Compatibility and verification
 
-GitHub's webpage payloads are internal interfaces. Parsers target the React repository, PR, pull-list, branches, Actions and commits routes observed on 2026-10-26. Legacy PR metadata has a limited fallback; if the current head cannot be matched to the CI head, CI stays unknown instead of being promoted. Changes to GitHub markup, login expiry, SSO or permissions can require opening the original page. Unknown values render as `—`, not zero.
+GitHub's webpage payloads are internal interfaces. Parsers target the React repository, PR, pull-list, branches, Actions and commits routes observed on 2026-10-26. Legacy PR metadata has a limited fallback; if the current head cannot be matched to the CI head, CI stays unknown instead of being promoted. Changes to GitHub markup, login expiry, SSO or permissions can require opening the original page. Unknown values render as `—`, not zero. Failed CI counts include cancelled, timed-out and action-required outcomes; neutral results count as skipped, and pending includes queued checks. Recognizable repeated Actions jobs with the same workflow and job name use the latest job; unidentified entries are retained. A chart status missing from the readable list is flagged as incomplete. Version 1.0.1 refetches CI data while preserving follows and other resource caches.
 
 Verification includes actual public GitHub HTML parsing and isolated Chromium browser tests of the full script with a controlled GitHub network and GM API adapter. The adapter verifies routing and focus requests; it does **not** prove native Tampermonkey tab activation. Actual extension installation, private-repository SSO access, Firefox and other script managers have not been end-to-end verified.
 

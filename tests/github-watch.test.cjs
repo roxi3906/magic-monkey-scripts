@@ -39,6 +39,10 @@ test("CI never promotes absent, incomplete, failed or stale checks", () => {
     total: 3,
     done: 2,
     passed: 1,
+    skipped: 1,
+    failed: 0,
+    pending: 1,
+    unknown: 0,
   });
 });
 
@@ -59,4 +63,45 @@ test("only fresh passing PRs sort ahead without losing deterministic order", () 
     ["b", "c", "a"],
   );
   assert.equal(items[0].key, "a");
+});
+
+// Regression: completed does not mean passed; keep every outcome count explicit.
+test("CI counts mixed outcomes including skipped, failed and unknown checks", () => {
+  assert.deepEqual(
+    core.summarizeCI([
+      ...Array(17).fill("success"),
+      ...Array(11).fill("skipped"),
+      "failure",
+      "failure",
+    ]),
+    {
+      state: "failure",
+      total: 30,
+      done: 30,
+      passed: 17,
+      skipped: 11,
+      failed: 2,
+      pending: 0,
+      unknown: 0,
+    },
+  );
+  assert.deepEqual(
+    core.summarizeCI([
+      "success",
+      "cancelled",
+      "queued",
+      "in_progress",
+      "unrecognized",
+    ]),
+    {
+      state: "failure",
+      total: 5,
+      done: 2,
+      passed: 1,
+      skipped: 0,
+      failed: 1,
+      pending: 2,
+      unknown: 1,
+    },
+  );
 });
