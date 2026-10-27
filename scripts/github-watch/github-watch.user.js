@@ -2,7 +2,7 @@
 // @name         GitHub 关注面板
 // @name:en      GitHub Watch Panel
 // @namespace    https://github.com/roxi3906/magic-monkey-scripts
-// @version      1.0.1
+// @version      1.1.0
 // @description  使用已有登录态关注 GitHub 仓库、分支、PR 和 CI，支持缓存和标签跳转。
 // @description:en Watch GitHub repositories, branches, pull requests and CI using your existing session.
 // @author       Roxi
@@ -22,6 +22,7 @@
 // @grant        GM_getTabs
 // @grant        GM_addValueChangeListener
 // @grant        GM_openInTab
+// @grant        GM_notification
 // @grant        window.focus
 // @run-at       document-idle
 // ==/UserScript==
@@ -30,7 +31,7 @@
   "use strict";
 
   const ORIGIN = "https://github.com";
-  const TTL = 60000;
+  const TTL = 30000;
   const RESERVED = new Set([
     "settings",
     "login",
@@ -192,6 +193,7 @@
         title: p.title,
         author: p.author?.displayLogin || "",
         comments: count(p.commentCount ?? 0),
+        createdAt: p.createdAt || "",
         updatedAt: p.updatedAt || p.createdAt || "",
       })),
     };
@@ -208,6 +210,7 @@
         base: p.baseBranch,
         head: p.headBranch,
         sha: p.headSha,
+        createdAt: p.createdTime || "",
         updatedAt: p.updatedTime || p.createdTime || "",
       };
     // 旧版 PR 页面使用稳定语义节点；无法识别时明确失败，不猜测状态或数量。
@@ -231,6 +234,7 @@
           ?.textContent?.replaceAll(",", ""),
       ),
       sha: "",
+      createdAt: "",
       updatedAt: "",
     };
   };
@@ -250,17 +254,18 @@
       // Checks 侧栏会同时包含同名工作流的旧执行；只对有明确身份的 Actions job 去重。
       const link = icon
         .closest(".checks-list-item")
-        ?.querySelector('a[href*="/job/"]');
+        ?.querySelector('a[href*="/job/"], a.SideNav-subItem');
       const job = link
         ?.getAttribute("href")
         ?.match(
           /^(\/[\w.-]+\/[\w.-]+)\/actions\/runs\/\d+\/job\/(\d+)(?:[?#]|$)/,
         );
-      const workflow = icon
+      const workflowLink = icon
         .closest('details[id^="sidebar_check_suite_"]')
-        ?.querySelector('summary a[href*="/actions/runs/"]')
-        ?.textContent.replace(/\s+/g, " ")
-        .trim();
+        ?.querySelector('summary a[href*="/actions/runs/"]');
+      const workflow = workflowLink?.textContent.replace(/\s+/g, " ").trim();
+      const workflowName =
+        workflowLink?.querySelector("span")?.textContent.trim() || workflow;
       const name = link?.textContent.trim();
       const key =
         job && workflow && name
@@ -268,7 +273,13 @@
           : icon;
       const previous = latest.get(key);
       if (!previous || BigInt(job[2]) > previous.id)
-        latest.set(key, { state, id: job ? BigInt(job[2]) : 0n });
+        latest.set(key, {
+          state,
+          id: job ? BigInt(job[2]) : 0n,
+          name: name
+            ? `${workflowName ? workflowName + " / " : ""}${name}`
+            : "未命名检查",
+        });
     }
     const states = [...latest.values()].map((check) => check.state);
     if (
@@ -295,6 +306,15 @@
     }
     return {
       ...ci,
+      // 即使总状态已失败，也保留其他仍运行或排队的检查，供卡片独立显示。
+      activeChecks: [...latest.values()]
+        .filter((check) => stateOf(check.state) === "pending")
+        .map((check) => ({
+          name: check.name,
+          status: /queue|waiting|requested/i.test(check.state)
+            ? "queued"
+            : "running",
+        })),
       sha: p.pullRequestsLayoutRoute?.pullRequest?.headSha || "",
     };
   };
@@ -403,9 +423,14 @@
 
     // 缓存只包含解析后的显示字段；每个资源独立重验证，失败保留最后成功值。
     const resource = async (path, parse, ttl = TTL, cachedOnly = false) => {
-      // 旧 CI 缓存只有完成数，不能通过 304 恢复分类；单独升级该资源，不动关注列表。
-      const key =
-        cachePrefix + path + (parse === parseChecks ? ":counts-v2" : "");
+      // 新字段不能从旧缓存的304响应恢复；仅升级CI和PR元数据，不动关注列表。
+      const revision =
+        parse === parseChecks
+          ? ":counts-v3"
+          : [parsePR, parsePullList].includes(parse)
+            ? ":pr-v2"
+            : "";
+      const key = cachePrefix + path + revision;
       const load = async () => {
         const saved = await GM.getValue(key);
         if (
@@ -536,6 +561,7 @@
         ...preview,
         ...main.data,
         comments: summary?.comments ?? null,
+        createdAt: main.data?.createdAt || summary?.createdAt || "",
         ci: mismatch ? { ...ci, state: "unknown" } : ci,
         stale: incomplete || main.stale || check.stale || listing.stale,
         at: Math.min(
@@ -550,7 +576,7 @@
       const info = await resource(
         `/${target.repo}`,
         parseRepo,
-        TTL * 5,
+        TTL,
         cachedOnly,
       );
       const list = await pullList(target.repo, cachedOnly);
@@ -615,37 +641,86 @@
         key: target?.key || "",
         url: location.href,
         viewer,
+        seenAt: Date.now(),
       };
       GM_saveTab(tab);
     };
     const jump = async (target) => {
       const url = targetURL(target);
-      const match = Object.values(await getTabs())
+      const matches = Object.values(await getTabs())
         .map((t) => t.githubWatch)
-        .find((t) => t?.key === target.key && t.viewer === viewer);
-      if (match?.id === tabId) {
-        window.focus();
-        return;
-      }
-      if (match) {
+        .filter((t) => t?.key === target.key && t.viewer === viewer)
+        .sort((a, b) => (b.seenAt || 0) - (a.seenAt || 0));
+      for (const match of matches) {
+        if (match.id === tabId && parseTarget(location.href)?.key === target.key) {
+          window.focus();
+          return;
+        }
+        const nonce = crypto.randomUUID();
+        const ackKey = `${cachePrefix}focus-ack:${nonce}`;
         await GM.setValue(focusKey, {
           id: match.id,
           key: target.key,
           time: Date.now(),
-          nonce: crypto.randomUUID(),
+          nonce,
         });
-        return;
+        // 标签注册可能在离开GitHub后残留；只有活跃脚本确认后才视为跳转完成。
+        try {
+          for (let attempt = 0; attempt < 10; attempt++) {
+            if (await GM.getValue(ackKey)) return;
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        } finally {
+          await GM.deleteValue(ackKey);
+        }
       }
       GM_openInTab(url, { active: true, insert: true, setParent: true });
     };
-    GM_addValueChangeListener(focusKey, (_key, _old, value, remote) => {
+    // 同账号跨标签共享完成基线；只通知已观察到的未完成→完成，避免启动时历史结果刷屏。
+    const notifyCompletion = async (item) => {
+      const ci = item.ci;
+      if (item.stale || !ci?.sha || !ci.total || ci.incomplete || ci.unknown)
+        return;
+      if (!navigator.locks)
+        throw new Error("当前浏览器不支持 Web Locks，CI 完成通知不可用");
+      await withLock(`notify:${item.key}`, async () => {
+        accountOK();
+        const key = `${prefix}notification:${item.key}`;
+        const previous = await GM.getValue(key);
+        if (previous && item.at < previous.at) return;
+        const complete = ci.done === ci.total && !ci.pending;
+        if (previous?.sha === ci.sha && !previous.complete && complete) {
+          // url在源标签关闭后仍可兜底打开；源标签存活时阻止默认打开并复用现有跳转。
+          GM_notification({
+            title: `PR #${item.number} ${item.title || item.repo}`,
+            text: `${item.repo} · CI 已全部运行完毕\n通过 ${ci.passed} · 失败 ${ci.failed}`,
+            tag: `${prefix}ci-complete:${item.key}`,
+            url: targetURL(item),
+            highlight: false,
+            onclick: (event) => {
+              event?.preventDefault();
+              return jump(item).catch(showError);
+            },
+          });
+          if (message.startsWith("CI 通知发送失败：")) {
+            message = "";
+            renderNotice();
+          }
+        }
+        await GM.setValue(key, { sha: ci.sha, complete, at: item.at });
+      });
+    };
+    GM_addValueChangeListener(focusKey, async (_key, _old, value, remote) => {
       if (
         remote &&
         value?.id === tabId &&
         Date.now() - value.time < 5000 &&
-        value.key === parseTarget(location.href)?.key
-      )
+        value.key === parseTarget(location.href)?.key &&
+        /^[\w-]+$/.test(value.nonce || "")
+      ) {
         window.focus();
+        await GM.setValue(`${cachePrefix}focus-ack:${value.nonce}`, { at: Date.now() });
+      }
     });
     const openURL = (url) => {
       const parsed = new URL(url, ORIGIN);
@@ -671,7 +746,8 @@
       .launcher{float:right;width:46px;height:46px;margin-top:10px;border-radius:15px;background:#008c8c;color:#fff;box-shadow:0 5px 20px #0002;font:700 14px system-ui}.launcher:hover{background:#006764}
       .panel{font:12px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#242b2a;width:430px;max-width:calc(100vw - 36px);height:min(690px,calc(100dvh - 100px));background:#f7f8f8;border:1px solid #dfe5e4;border-radius:16px;box-shadow:0 16px 64px #0003;display:flex;flex-direction:column;overflow:hidden}.panel[hidden]{display:none}
       header{padding:15px 16px 10px;background:#fff}h1{font-size:16px;letter-spacing:-.3px;margin:0}h2{font-size:12px;margin:12px 0 6px;font-weight:600;color:#64706e}p{margin:5px 0}.row{display:flex;gap:7px;align-items:center;flex-wrap:wrap}.spread{justify-content:space-between}.grow{flex:1;min-width:0}.sub{font-size:11px;color:#64706e}.tabs{display:flex;gap:5px;margin-top:12px}.tabs button{flex:1;background:#f4f5f5}.tabs button[aria-pressed=true]{background:#e6f3f0;color:#006764;font-weight:700}
-      .tools{padding:10px 16px;display:grid;gap:8px;background:white}input[type=text]{min-width:0;flex:1;border:1px solid #d5ddda;border-radius:7px;padding:7px 9px;background:#fff;color:#242b2a;width:100%}.body{overflow:auto;overscroll-behavior:contain;padding:4px 12px 12px;flex:1;min-height:0}.card{background:white;border:1px solid #e3e8e6;border-radius:10px;padding:12px;margin:8px 0}.card.pass{border-left:3px solid #008c8c}.title{font-weight:650;font-size:13px;overflow-wrap:anywhere}.repo-label{color:#64706e;font-size:11px;margin-bottom:4px;overflow-wrap:anywhere}.badge{font-size:10px;border-radius:5px;padding:2px 5px;background:#eef1f0;color:#4e5b57}.good{background:#e6f3f0;color:#006764}.metrics{font-size:11px;color:#64706e;margin-top:7px;display:flex;gap:10px;flex-wrap:wrap}.ci{margin:9px 0 3px}.track{height:3px;background:#e9eeec;border-radius:9px;overflow:hidden;margin-top:5px}.fill{height:100%;background:#008c8c}.stale{font-size:10px;color:#7a6250;margin-top:7px}.empty{text-align:center;padding:36px 14px;color:#64706e}.mini{padding:9px 0;margin:0}.mini+.mini{border-top:1px solid #f0f2f1}.mini .title{font-size:12px}.branch{background:#f7f9f8;border-radius:7px;padding:9px;margin-top:7px}.mono{font-family:ui-monospace,monospace}.link{background:none;padding:0;color:#006764;text-align:left;overflow-wrap:anywhere}.footer{padding:7px 16px;background:#fff;color:#64706e;font-size:10px}.notice{padding:5px 0;color:#69574a;overflow-wrap:anywhere}.confirm{background:#edf7f5;border-radius:8px;padding:10px;margin:8px 0}.branch-options{max-height:180px;overflow:auto;display:grid;gap:5px;margin:8px 0}label{display:flex;align-items:center;gap:6px;overflow-wrap:anywhere}input[type=checkbox]{accent-color:#008c8c}a{color:#006764}progress{width:100%}
+      .tools{padding:10px 16px;display:grid;gap:8px;background:white}.body{overflow:auto;overscroll-behavior:contain;padding:4px 12px 12px;flex:1;min-height:0}.card{background:white;border:1px solid #e3e8e6;border-radius:10px;padding:12px;margin:8px 0}.card.pass{border-left:3px solid #008c8c}.title{font-weight:650;font-size:13px;overflow-wrap:anywhere}.repo-label{color:#64706e;font-size:11px;margin-bottom:4px;overflow-wrap:anywhere}.badge{font-size:10px;border-radius:5px;padding:2px 5px;background:#eef1f0;color:#4e5b57}.good{background:#e6f3f0;color:#006764}.metrics{font-size:11px;color:#64706e;margin-top:7px;display:flex;gap:10px;flex-wrap:wrap}.ci{margin:9px 0 3px}.track{height:3px;background:#e9eeec;border-radius:9px;overflow:hidden;margin-top:5px}.fill{height:100%;background:#008c8c}.stale{font-size:10px;color:#7a6250;margin-top:7px}.empty{text-align:center;padding:36px 14px;color:#64706e}.mini{padding:9px 0;margin:0}.mini+.mini{border-top:1px solid #f0f2f1}.mini .title{font-size:12px}.branch{background:#f7f9f8;border-radius:7px;padding:9px;margin-top:7px}.mono{font-family:ui-monospace,monospace}.link{background:none;padding:0;color:#006764;text-align:left;overflow-wrap:anywhere}.footer{padding:7px 16px;background:#fff;color:#64706e;font-size:10px}.notice{padding:5px 0;color:#69574a;overflow-wrap:anywhere}.confirm{background:#edf7f5;border-radius:8px;padding:10px;margin:8px 0}.branch-options{max-height:180px;overflow:auto;display:grid;gap:5px;margin:8px 0}label{display:flex;align-items:center;gap:6px;overflow-wrap:anywhere}input[type=checkbox]{accent-color:#008c8c}a{color:#006764}progress{width:100%}
+      .pr-status-row{margin-top:8px}.pr-state,.ci-active{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:3px 9px;font-size:11px;font-weight:700;line-height:1.5}.pr-state{background:#e9edec;color:#4e5b57}.pr-state::before,.ci-active::before{content:"";width:6px;height:6px;flex-shrink:0;border-radius:50%;background:currentColor}.pr-state[data-state=open]{background:#d8f1e8;color:#006764}.pr-state[data-state=merged]{background:#eee2ff;color:#6836a2}.pr-state[data-state=closed]{background:#ffe4e2;color:#a82c26}.ci-active{background:#e2efff;color:#1858a8}.active-check{margin-top:3px;overflow-wrap:anywhere}.created-at{display:block;margin-top:5px}.tabs{margin-top:2px}
       @media(max-width:480px){.panel{width:calc(100vw - 36px)}header{padding:12px}.tools{padding:8px 12px}.body{padding:3px 8px 8px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
     `;
     root.append(style);
@@ -705,23 +781,11 @@
     top.lastChild.setAttribute("aria-label", "关闭面板");
     header.append(top, el("div", "sub", "仓库动态与 PR 检查，一处查看"));
     const tabs = el("div", "tabs");
-    header.append(tabs);
+
     const tools = el("div", "tools");
     const current = el("div", "row");
-    tools.append(current);
-    const form = el("form", "row");
-    const input = el("input");
-    input.type = "text";
-    input.placeholder = "owner/repo 或 PR 链接";
-    input.setAttribute("aria-label", "仓库或 PR 地址");
-    const addButton = button("添加", () => addInput(), "primary");
-    addButton.setAttribute("aria-label", "添加关注");
-    form.append(input, addButton);
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
-      addInput().catch(showError);
-    });
-    tools.append(form);
+    // 先操作当前标签，再切换分组；不提供跨地址添加入口。
+    tools.append(current, tabs);
     const notice = el("div", "notice");
     notice.setAttribute("role", "status");
     tools.append(notice);
@@ -729,7 +793,7 @@
     const footer = el(
       "div",
       "footer",
-      "每分钟增量更新 · 仅在 GitHub 页面打开时运行",
+      "每 30 秒尝试更新 · 后台更新 · CI 完成通知 · 请保留 GitHub 标签页（浏览器休眠或限速时可能延迟）",
     );
     panel.append(header, tools, body, footer);
     root.append(panel);
@@ -740,12 +804,6 @@
     const renderNotice = () => {
       notice.textContent = message;
       notice.hidden = !message;
-    };
-    const addInput = async () => {
-      const target = parseTarget(input.value);
-      if (!target) throw new Error("请输入有效的 GitHub 仓库或 PR 地址");
-      await add(target);
-      input.value = "";
     };
     const add = async (target) => {
       accountOK();
@@ -852,6 +910,14 @@
         if (ci.unknown) counts.push(`未知 ${ci.unknown}`);
         node.append(el("div", "sub ci-counts", counts.join(" · ")));
       }
+      for (const check of ci.activeChecks || [])
+        node.append(
+          el(
+            "div",
+            "sub active-check",
+            `${check.status === "queued" ? "排队中" : "运行中"}：${check.name}`,
+          ),
+        );
       if (ci.incomplete)
         node.append(el("div", "sub", "部分检查未加载，数量仅含已读取项"));
       if (ci.total) {
@@ -943,13 +1009,48 @@
         draft: "草稿",
         unknown: "未知",
       };
+      // PR生命周期与CI运行状态分开：失败的检查不能遮住仍在运行的其他检查。
+      const statusRow = el("div", "row pr-status-row");
+      const status = el("span", "pr-state", state[item.state] || "未知");
+      status.dataset.state = Object.hasOwn(state, item.state)
+        ? item.state
+        : "unknown";
+      status.setAttribute(
+        "aria-label",
+        `PR 状态：${state[item.state] || "未知"}`,
+      );
+      statusRow.append(status);
+      if (item.ci?.pending)
+        statusRow.append(
+          el(
+            "span",
+            "ci-active",
+            `${item.stale ? "上次记录：" : ""}CI 进行中 ${item.ci.pending}`,
+          ),
+        );
+      card.append(statusRow);
       metrics.append(
-        el("span", "", state[item.state] || "未知"),
         el("span", "", item.author || "—"),
         el("span", "", `评论 ${item.comments ?? "—"}`),
       );
       if (!mini) metrics.append(el("span", "", `提交 ${item.commits ?? "—"}`));
-      card.append(metrics, ciView(item));
+      card.append(metrics);
+      if (mini) {
+        const timestamp = Date.parse(item.createdAt);
+        const created = el(
+          "time",
+          "sub created-at",
+          Number.isFinite(timestamp)
+            ? `创建于 ${new Date(timestamp).toLocaleString("zh-CN", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`
+            : "创建时间未知",
+        );
+        if (Number.isFinite(timestamp)) {
+          created.dateTime = item.createdAt;
+          created.title = item.createdAt;
+        }
+        card.append(created);
+      }
+      card.append(ciView(item));
       if (!mini || item.error) showStale(card, item);
       if (!mini) appendConfirmation(item, card);
       return card;
@@ -977,7 +1078,7 @@
       const result = await resource(
         `/${item.repo}/branches/all?page=${draft.page + 1}`,
         parseBranches,
-        TTL * 5,
+        TTL,
       );
       if (editor !== draft) return;
       draft.loading = false;
@@ -1175,11 +1276,12 @@
         refreshQueued = true;
         return;
       }
-      if (document.hidden || accountChanged) return;
+      if (accountChanged) return;
       busy = true;
       renderCurrent();
       try {
         accountOK();
+        await registerTab();
         await readItems();
         const snapshot = [...items];
         for (const cachedOnly of [true, false])
@@ -1190,6 +1292,14 @@
               : await getRepo(item, cachedOnly);
             if (items.some((current) => current.key === item.key))
               rows.set(item.key, result);
+            if (
+              !cachedOnly &&
+              items.some((current) => current.key === item.key)
+            )
+              for (const pr of item.number ? [result] : result.prs || [])
+                await notifyCompletion(pr).catch((error) =>
+                  showError(new Error(`CI 通知发送失败：${error.message}`)),
+                );
             if (opened && !editor) render();
           }
         await trimCache();
@@ -1226,6 +1336,7 @@
         renderCurrent();
       }
     }, 1000);
+    // 后台和面板收起时也刷新；浏览器仍可能节流或冻结页面计时器。
     setInterval(refresh, TTL);
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
