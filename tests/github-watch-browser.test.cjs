@@ -61,8 +61,17 @@ const setup = async () => {
     const page = await context.newPage();
     pages.set(page, String(pages.size + 1));
     await page.addInitScript(() => {
+      // Keep the real scheduler but expose its callbacks to test elapsed background refreshes.
+      window.scheduled = new Map();
+      const schedule = window.setInterval.bind(window);
+      window.setInterval = (callback, ms, ...args) => {
+        window.scheduled.set(ms, callback);
+        return schedule(callback, ms, ...args);
+      };
       window.listeners = {};
       window.opened = [];
+      window.notifications = [];
+      window.GM_notification = (details) => notifications.push(details);
       window.focused = 0;
       window.GM = {
         getValue: async (k, d) => (await gmRead(k)) ?? d,
@@ -89,6 +98,7 @@ const setup = async () => {
     context,
     newPage,
     store,
+    tabs,
     requests,
     fail: () => {
       fail = true;
@@ -112,10 +122,13 @@ test("panel tracks PRs and repos, sorts passed CI, persists, confirms removal an
     await page.getByText("Pending change", { exact: true }).waitFor();
     await page.getByText("提交 3", { exact: true }).waitFor();
     await page.getByText("评论 4", { exact: true }).waitFor();
+    await page.evaluate(() => {
+      history.pushState({}, "", "/acme/demo/pull/2");
+      document.dispatchEvent(new Event("turbo:load"));
+    });
     await page
-      .getByLabel("仓库或 PR 地址")
-      .fill("https://github.com/acme/demo/pull/2");
-    await page.getByRole("button", { name: "添加关注", exact: true }).click();
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
     await page.getByText("全部通过 · 1/1", { exact: true }).waitFor();
     assert.equal(
       await page
@@ -177,8 +190,14 @@ test("existing tabs receive a focus request; missing targets open a new tab", as
     const first = await env.newPage();
     const second = await env.newPage("https://github.com/acme/demo/pull/2");
     await first.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
-    await first.getByLabel("仓库或 PR 地址").fill("acme/demo/pull/2");
-    await first.getByRole("button", { name: "添加关注", exact: true }).click();
+    await second.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await second
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
+    await second.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    // A throttled but responsive remote tab must still receive the focus request.
+    for (const tab of Object.values(env.tabs))
+      tab.githubWatch.seenAt = Date.now() - 120000;
     await first
       .getByRole("button", { name: "跳转 acme/demo#2", exact: true })
       .click();
@@ -271,7 +290,7 @@ test("failed refresh retains data as stale and removes passed-first highlighting
   }
 });
 
-test("new follows during an in-flight refresh are not stranded until the next minute", async () => {
+test("new follows during an in-flight refresh are not stranded until the next refresh period", async () => {
   const env = await setup();
   try {
     env.respond(async (route) => {
@@ -288,8 +307,13 @@ test("new follows during an in-flight refresh are not stranded until the next mi
     await page
       .getByRole("button", { name: "关注当前 PR", exact: true })
       .click();
-    await page.getByLabel("仓库或 PR 地址").fill("acme/demo/pull/2");
-    await page.getByRole("button", { name: "添加关注", exact: true }).click();
+    await page.evaluate(() => {
+      history.pushState({}, "", "/acme/demo/pull/2");
+      document.dispatchEvent(new Event("turbo:load"));
+    });
+    await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
     await page
       .getByText("Passing change", { exact: true })
       .waitFor({ timeout: 4000 });
@@ -717,7 +741,340 @@ test("CI deduplication keeps distinct workflows and unknown jobs, and ignores su
     );
     assert.equal(missingSkipped.incomplete, true);
     assert.equal(missingSkipped.state, "unknown");
+    const thirdParty = await parse('<div class="checks-list-item"><span class="checks-list-item-icon"><svg aria-label="This check is in progress"></svg></span><a class="SideNav-subItem" href="/acme/demo/pull/1/checks?check_run_id=42"><span>External CI</span></a></div>');
+    assert.equal(thirdParty.activeChecks[0].name, "External CI");
   } finally {
     await page.close();
+  }
+});
+
+test("only current-tab follow controls remain, with group switches below them", async () => {
+  const env = await setup();
+  try {
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    assert.equal(await page.getByRole("textbox").count(), 0);
+    assert.equal(
+      await page.getByRole("button", { name: "添加关注", exact: true }).count(),
+      0,
+    );
+    const follow = await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .boundingBox();
+    const group = await page
+      .getByRole("button", { name: "PR (0)", exact: true })
+      .boundingBox();
+    assert.ok(group.y >= follow.y + follow.height);
+    await page.evaluate(() => {
+      history.pushState({}, "", "/settings/profile");
+      document.dispatchEvent(new Event("turbo:load"));
+    });
+    assert.equal(
+      await page.getByRole("button", { name: /关注当前/ }).count(),
+      0,
+    );
+    assert.match(await page.locator(".footer").innerText(), /30 秒.*后台/);
+  } finally {
+    await env.context.close();
+  }
+});
+
+test("PR status is prominent and running CI stays visible alongside failed checks and creation dates", async () => {
+  const env = await setup();
+  try {
+    env.respond(async (route) => {
+      if (!route.request().url().endsWith("/checks")) return false;
+      const payload = checks([]);
+      payload["pullRequestsChecksRoute.Main"].value = suite(10, "CI", [
+        [100, "Build linux", "This job is in progress"],
+        [101, "Build windows", "This job is queued"],
+        [102, "Lint", "This job failed"],
+      ]);
+      await route.fulfill({ contentType: "text/html", body: html(payload) });
+      return true;
+    });
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    const card = page.locator('article[data-key="acme/demo#1"]');
+    assert.equal(await card.locator('.pr-state[data-state="open"]').count(), 1);
+    assert.match(await card.innerText(), /CI 进行中 2/);
+    assert.match(await card.innerText(), /运行中：CI \/ Build linux/);
+    assert.match(await card.innerText(), /排队中：CI \/ Build windows/);
+    assert.match(await card.innerText(), /失败 1/);
+    await page.screenshot({ path: ".codex/probes/pr-status-desktop.png" });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: ".codex/probes/pr-status-mobile.png" });
+    await page
+      .getByRole("button", { name: "关注当前仓库", exact: true })
+      .click();
+    await page.getByText("★ 123", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    const mini = page.locator('.mini[data-key="acme/demo#1"]');
+    assert.equal(
+      await mini.locator('time[datetime="2026-10-25T00:00:00Z"]').count(),
+      1,
+    );
+    assert.match(await mini.innerText(), /创建于/);
+    assert.match(await mini.innerText(), /Build linux/);
+  } finally {
+    await env.context.close();
+  }
+});
+
+test("30-second scheduled updates run with a hidden document and closed panel", async () => {
+  const env = await setup();
+  try {
+    env.store["github-watch:v1:tester:item:acme/demo#1"] = {
+      repo: "acme/demo",
+      number: 1,
+      key: "acme/demo#1",
+    };
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    await page.getByRole("button", { name: "关闭面板", exact: true }).click();
+    assert.equal(await page.evaluate(() => scheduled.has(30000)), true);
+    let requests = 0;
+    env.respond(async (route) => {
+      if (route.request().resourceType() !== "fetch") return false;
+      requests++;
+      assert.equal(route.request().headers()["if-none-match"], '\"fixture\"');
+      await route.fulfill({ status: 304, headers: { etag: '\"fixture\"' } });
+      return true;
+    });
+    await page.evaluate(async () => {
+      Object.defineProperty(document, "hidden", {
+        configurable: true,
+        value: true,
+      });
+      const now = Date.now();
+      Date.now = () => now + 31000;
+      await scheduled.get(30000)();
+    });
+    assert.equal(requests, 3);
+    await page.evaluate(async () => {
+      await scheduled.get(30000)();
+    });
+    assert.equal(
+      requests,
+      3,
+      "fresh background caches prevent duplicate downloads",
+    );
+  } finally {
+    await env.context.close();
+  }
+});
+
+// Only a fresh completion transition should notify, including failing terminal results.
+test(
+    "CI completion notifies once across tabs and clicking reuses the PR tab",
+    async () => {
+      const env = await setup();
+      try {
+        const first = await env.newPage();
+        const second = await env.newPage("https://github.com/acme/demo");
+        await first
+          .getByRole("button", { name: "打开 GitHub 关注面板" })
+          .click();
+        await first
+          .getByRole("button", { name: "关注当前 PR", exact: true })
+          .click();
+        await first.getByText("评论 4", { exact: true }).waitFor();
+        await first
+          .getByRole("button", { name: "刷新", exact: true })
+          .waitFor();
+        await second.evaluate(async () => {
+          await scheduled.get(30000)();
+        });
+        env.respond(async (route) => {
+          if (!route.request().url().endsWith("/checks")) return false;
+          await route.fulfill({
+            contentType: "text/html",
+            body: html(checks(["This job succeeded", "This job failed"])),
+          });
+          return true;
+        });
+        for (const [key, value] of Object.entries(env.store))
+          if (key.includes(":cache:")) {
+            value.at = Date.now() - 31000;
+            value.attemptedAt = value.at;
+          }
+        await Promise.all(
+          [first, second].map((page) =>
+            page.evaluate(async () => {
+              Object.defineProperty(document, "hidden", {
+                configurable: true,
+                value: true,
+              });
+              await scheduled.get(30000)();
+            }),
+          ),
+        );
+        const pages = [first, second];
+        const counts = await Promise.all(
+          pages.map((page) => page.evaluate(() => notifications.length)),
+        );
+        assert.equal(counts[0] + counts[1], 1);
+        const sender = pages[counts.indexOf(1)];
+        const notice = await sender.evaluate(() => ({
+          title: notifications[0].title,
+          text: notifications[0].text,
+          url: notifications[0].url,
+        }));
+        assert.match(notice.title, /#1.*Pending change/);
+        assert.match(notice.text, /通过 1.*失败 1/);
+        assert.equal(notice.url, "https://github.com/acme/demo/pull/1");
+        // Background throttling must not exclude an old but responsive tab.
+        for (const tab of Object.values(env.tabs)) tab.githubWatch.seenAt = Date.now() - 120000;
+        await sender.evaluate(async () => {
+          window.prevented = false;
+          await notifications[0].onclick({
+            preventDefault: () => {
+              prevented = true;
+            },
+          });
+        });
+        assert.equal(await sender.evaluate(() => prevented), true);
+        assert.equal(await first.evaluate(() => focused), 1);
+        assert.equal(await sender.evaluate(() => opened.length), 0);
+        await Promise.all(
+          pages.map((page) =>
+            page.evaluate(async () => {
+              await scheduled.get(30000)();
+            }),
+          ),
+        );
+        assert.equal(
+          (
+            await Promise.all(
+              pages.map((page) => page.evaluate(() => notifications.length)),
+            )
+          ).reduce((a, b) => a + b),
+          1,
+        );
+        // If the matching tab navigates away, the same notification opens the PR instead.
+        await first.evaluate(() => {
+          history.pushState({}, "", "/acme/demo");
+          // Keep the old registration to simulate leaving GitHub without a route callback.
+        });
+        await first.waitForTimeout(50);
+        await sender.evaluate(async () => {
+          await notifications[0].onclick({ preventDefault() {} });
+        });
+        assert.deepEqual(await sender.evaluate(() => opened), [
+          "https://github.com/acme/demo/pull/1",
+        ]);
+      } finally {
+        await env.context.close();
+      }
+    },
+  );
+
+test("already completed CI is a silent baseline and stale results cannot notify", async () => {
+  const env = await setup();
+  try {
+    const page = await env.newPage("https://github.com/acme/demo/pull/2");
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
+    await page.getByText("全部通过 · 1/1", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => notifications.length), 0);
+    env.fail();
+    for (const [key, value] of Object.entries(env.store))
+      if (key.includes(":cache:")) {
+        value.at = Date.now() - 31000;
+        value.attemptedAt = value.at;
+      }
+    await page.evaluate(async () => {
+      await scheduled.get(30000)();
+    });
+    assert.equal(await page.evaluate(() => notifications.length), 0);
+  } finally {
+    await env.context.close();
+  }
+});
+
+test("completion rejects mismatched or incomplete CI and retries notification API failures", async () => {
+  const env = await setup();
+  try {
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page
+      .getByRole("button", { name: "关注当前 PR", exact: true })
+      .click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    const expire = () => {
+      for (const [key, value] of Object.entries(env.store))
+        if (key.includes(":cache:")) {
+          value.at = Date.now() - 31000;
+          value.attemptedAt = value.at;
+        }
+    };
+    let mode = "mismatch";
+    env.respond(async (route) => {
+      if (!route.request().url().endsWith("/checks")) return false;
+      const payload = checks(["This job succeeded"]);
+      if (mode === "mismatch")
+        payload.pullRequestsLayoutRoute.pullRequest.headSha = "old-sha";
+      if (mode === "incomplete")
+        payload["pullRequestsChecksRoute.Main"].value +=
+          '<svg class="donut-chart"><path class="in_progress"></path></svg>';
+      await route.fulfill({ contentType: "text/html", body: html(payload) });
+      return true;
+    });
+    for (mode of ["mismatch", "incomplete"]) {
+      expire();
+      await page.evaluate(async () => {
+        await scheduled.get(30000)();
+      });
+      assert.equal(await page.evaluate(() => notifications.length), 0);
+    }
+    mode = "complete";
+    await page.evaluate(() => {
+      GM_notification = () => {
+        throw new Error("permission denied");
+      };
+    });
+    expire();
+    await page.evaluate(async () => {
+      await scheduled.get(30000)();
+    });
+    assert.match(await page.locator(".notice").innerText(), /CI 通知发送失败/);
+    await page.evaluate(() => {
+      GM_notification = (details) => notifications.push(details);
+    });
+    await page.evaluate(async () => {
+      await scheduled.get(30000)();
+    });
+    assert.equal(await page.evaluate(() => notifications.length), 1);
+    assert.equal(await page.locator(".notice").innerText(), "");
+  } finally {
+    await env.context.close();
+  }
+});
+
+
+test("monitoring continues without Web Locks and explains notifications are unavailable", async () => {
+  const env = await setup();
+  try {
+    await env.context.addInitScript(() => Object.defineProperty(navigator, "locks", { value: undefined }));
+    const page = await env.newPage();
+    await page.getByRole("button", { name: "打开 GitHub 关注面板" }).click();
+    await page.getByRole("button", { name: "关注当前 PR", exact: true }).click();
+    await page.getByText("评论 4", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "刷新", exact: true }).waitFor();
+    assert.match(await page.locator(".notice").innerText(), /不支持 Web Locks/);
+    assert.equal(await page.evaluate(() => notifications.length), 0);
+    assert.match(await page.locator("article").innerText(), /CI 进行中/);
+  } finally {
+    await env.context.close();
   }
 });
