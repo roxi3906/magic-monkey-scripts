@@ -2,13 +2,15 @@
 // @name         GitHub 自动折叠测试文件
 // @name:en      GitHub Collapse Test Files
 // @namespace    https://github.com/roxi3906/magic-monkey-scripts
-// @version      0.1.0
+// @version      0.1.1
 // @description  在 GitHub PR Changes 页面自动折叠 .test.[扩展名] 文件，支持动态加载和手动展开。
 // @description:en Automatically collapse .test.[extension] files in GitHub PR diffs, with dynamic loading and manual expansion support.
 // @author       Roxi
 // @license      MIT
 // @homepageURL  https://github.com/roxi3906/magic-monkey-scripts/tree/main/scripts/github-collapse-test-files
 // @supportURL   https://github.com/roxi3906/magic-monkey-scripts/issues
+// @downloadURL  https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-collapse-test-files/github-collapse-test-files.user.js
+// @updateURL    https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-collapse-test-files/github-collapse-test-files.user.js
 // @match        https://github.com/*
 // @grant        none
 // @run-at       document-idle

@@ -7,10 +7,16 @@ Automatically collapses files whose names end in `.test.[extension]` in GitHub p
 ## Install
 
 1. Install [Tampermonkey](https://www.tampermonkey.net/) or another userscript manager.
-2. Create a new userscript and replace its contents with [github-collapse-test-files.user.js](github-collapse-test-files.user.js).
-3. Save, then reload your GitHub tab.
+2. [Install directly from GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-collapse-test-files/github-collapse-test-files.user.js) and confirm in your userscript manager.
+3. Reload your GitHub tab.
 
 The script is standalone and does not require the other scripts in this repository.
+
+## Updates
+
+Tampermonkey checks and downloads updates directly from the script on GitHub's `main` branch. Each release must increase `@version` (for example, `0.1.1` to `0.1.2`); changing code without increasing the version does not offer a normal update. Automatic updates must be enabled in your userscript manager; you can also trigger a manual update check.
+
+If you installed the previous Greasy Fork version or pasted the code manually, install once using the GitHub link above to switch the update source. If your manager keeps both copies, disable the old copy. The Greasy Fork listing has been removed.
 
 ## Behavior
 

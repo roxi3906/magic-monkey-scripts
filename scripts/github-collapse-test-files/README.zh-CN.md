@@ -7,10 +7,16 @@
 ## 安装
 
 1. 安装 [Tampermonkey](https://www.tampermonkey.net/) 等用户脚本管理器。
-2. 新建脚本，将内容全部替换为 [github-collapse-test-files.user.js](github-collapse-test-files.user.js) 的完整代码。
-3. 保存，然后刷新 GitHub 标签页。
+2. 点击[从 GitHub 直接安装](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-collapse-test-files/github-collapse-test-files.user.js)，在脚本管理器中确认安装。
+3. 刷新 GitHub 标签页。
 
 这是独立脚本，不依赖仓库中的其他脚本。
+
+## 更新
+
+油猴直接从 GitHub 的 `main` 分支检查并下载更新。每次发布须递增 `@version`（例如从 `0.1.1` 改为 `0.1.2`），仅修改代码而不提升版本号不会触发正常更新。需要在脚本管理器中启用自动更新，也可以手动检查更新。
+
+如果此前从 Greasy Fork 安装，或通过粘贴代码创建脚本，请使用上面的 GitHub 链接重新安装一次，以切换更新源。如果管理器保留了两份脚本，请停用旧版。Greasy Fork 上的发布已撤下。
 
 ## 行为
 
