@@ -10,6 +10,7 @@
 | -------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [GitHub 复制文件路径与行号](scripts/github-copy-path-line/README.zh-CN.md) | 从 GitHub Pull Request 差异中复制所选文件路径和行号范围。 | [Greasy Fork](https://greasyfork.org/zh-CN/scripts/591850-github-%E5%A4%8D%E5%88%B6%E6%96%87%E4%BB%B6%E8%B7%AF%E5%BE%84%E4%B8%8E%E8%A1%8C%E5%8F%B7) / [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-copy-path-line/github-copy-path-line.user.js) |
 | [GitHub 关注面板](scripts/github-watch/README.zh-CN.md)                    | 关注仓库、分支、PR 和 CI，支持本地缓存与标签跳转。        | [GitHub](https://raw.githubusercontent.com/roxi3906/magic-monkey-scripts/main/scripts/github-watch/github-watch.user.js)                                                                                                                                                                         |
+| [GitHub 自动折叠测试文件](scripts/github-collapse-test-files/README.zh-CN.md) | 自动折叠 GitHub PR 差异页的 `.test.[扩展名]` 文件。 | [源码 / 手动安装](scripts/github-collapse-test-files/github-collapse-test-files.user.js) |
 
 ## 安装方法
 
