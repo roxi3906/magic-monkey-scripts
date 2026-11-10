@@ -1,0 +1,42 @@
+name: Publish to Greasy Fork
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/github-collapse-test-files/github-collapse-test-files.user.js
+      - tools/publish-greasyfork.cjs
+      - .github/workflows/publish-greasyfork.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-greasyfork
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main' && github.repository == 'roxi3906/magic-monkey-scripts'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Always publish current main, including when an older run is retried.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - name: Validate publisher and script syntax
+        run: |
+          node --test tests/greasyfork-publish.test.cjs
+          node --check scripts/github-collapse-test-files/github-collapse-test-files.user.js
+      - name: Publish and verify
+        env:
+          GREASYFORK_WEBHOOK_SECRET: ${{ secrets.GREASYFORK_WEBHOOK_SECRET }}
+        run: |
+          export PUBLISH_SHA="$(git rev-parse HEAD)"
+          node tools/publish-greasyfork.cjs
